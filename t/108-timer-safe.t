@@ -63,7 +63,7 @@ registered timer
 
 --- error_log eval
 [
-qr/\[lua\] content_by_lua_block\(nginx\.conf:\d+\):\d+: elapsed: 0\.0(?:4[4-9]|5[0-6])/,
+qr/\[lua\] content_by_lua\(nginx\.conf:\d+\):\d+: elapsed: 0\.0(?:4[4-9]|5[0-6])/,
 "lua ngx.timer expired",
 "stream lua close fake stream connection"
 ]
@@ -110,7 +110,7 @@ registered timer
 --- error_log eval
 [
 qr/\[lua\] .*? my lua timer handler/,
-qr/\[lua\] content_by_lua_block\(nginx\.conf:\d+\):\d+: elapsed: 0\.0(?:6[4-9]|7[0-6])/,
+qr/\[lua\] content_by_lua\(nginx\.conf:\d+\):\d+: elapsed: 0\.0(?:6[4-9]|7[0-6])/,
 "lua ngx.timer expired",
 "stream lua close fake stream connection"
 ]
@@ -220,7 +220,7 @@ qr/received: Server: \S+/,
 
 === TEST 4: tcp cosocket in timer handler (keep-alive connections)
 --- stream_config eval
-    "lua_package_path '$::HtmlDir/?.lua;./?.lua';"
+    "lua_package_path '$::HtmlDir/?.lua;./?.lua;;';"
 
 --- stream_server_config
     content_by_lua_block {
@@ -261,7 +261,7 @@ function go(port)
 
     print("connected: ", ok, ", reused: ", sock:getreusedtimes())
 
-    local req = "flush_all\r\n"
+    local req = "get __nil\r\n"
 
     local bytes, err = sock:send(req)
     if not bytes then
@@ -309,7 +309,7 @@ qr/\[lua\] .*? my lua timer handler/,
 "stream lua close fake stream connection",
 qr/go\(\): connected: 1, reused: \d+/,
 "go(): request sent: 11",
-"go(): received: OK",
+"go(): received: END",
 ]
 
 
@@ -350,7 +350,7 @@ registered timer
 
 --- error_log eval
 [
-qr/\[lua\] content_by_lua_block\(nginx\.conf:\d+\):\d+: elapsed: 0(?:[^.]|\.00)/,
+qr/\[lua\] content_by_lua\(nginx\.conf:\d+\):\d+: elapsed: 0(?:[^.]|\.00)/,
 "lua ngx.timer expired",
 "stream lua close fake stream connection"
 ]
@@ -382,7 +382,7 @@ qr/\[lua\] content_by_lua_block\(nginx\.conf:\d+\):\d+: elapsed: 0(?:[^.]|\.00)/
 
             print("connected: ", ok)
 
-            local req = "\0\1\0\0\0\1\0\0flush_all\r\n"
+            local req = "\0\1\0\0\0\1\0\0get __nil\r\n"
             local ok, err = udp:send(req)
             if not ok then
                 fail("failed to send: ", err)
@@ -429,7 +429,7 @@ qr/\[lua\] .*? my lua timer handler/,
 "lua ngx.timer expired",
 "stream lua close fake stream connection",
 "connected: 1",
-"received 12 bytes: \x{00}\x{01}\x{00}\x{00}\x{00}\x{01}\x{00}\x{00}OK\x{0d}\x{0a}"
+"received 13 bytes: \x{00}\x{01}\x{00}\x{00}\x{00}\x{01}\x{00}\x{00}END\x{0d}\x{0a}"
 ]
 
 
@@ -487,7 +487,7 @@ qr/\[lua\] log_by_lua\(nginx\.conf:\d+\):\d+: elapsed: 0\.0(?:6[4-9]|7[0-6])/,
 TODO
 --- SKIP
 --- stream_config eval
-    "lua_package_path '$::HtmlDir/?.lua;./?.lua';"
+    "lua_package_path '$::HtmlDir/?.lua;./?.lua;;';"
 
 --- stream_server_config
         echo hello;
@@ -529,7 +529,7 @@ function go(port)
 
     print("connected: ", ok, ", reused: ", sock:getreusedtimes())
 
-    local req = "flush_all\r\n"
+    local req = "get __nil\r\n"
 
     local bytes, err = sock:send(req)
     if not bytes then
@@ -576,7 +576,7 @@ qr/\[lua\] .*? my lua timer handler/,
 "stream lua close fake stream connection",
 qr/go\(\): connected: 1, reused: \d+/,
 "go(): request sent: 11",
-"go(): received: OK",
+"go(): received: END",
 ]
 
 
@@ -1025,4 +1025,3 @@ registered timer
 lua ngx.timer expired
 stream lua close fake stream connection
 trace: [m][f][g]
-

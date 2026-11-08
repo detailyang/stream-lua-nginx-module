@@ -7,10 +7,11 @@ our $StapScript = $t::StapThread::StapScript;
 
 repeat_each(2);
 
-plan tests => repeat_each() * (blocks() * 5 + 2);
+plan tests => repeat_each() * (blocks() * 5 - 1) - 2;
 
 $ENV{TEST_NGINX_RESOLVER} ||= '8.8.8.8';
 $ENV{TEST_NGINX_MEMCACHED_PORT} ||= '11211';
+$ENV{TEST_NGINX_REDIS_PORT} ||= '6379';
 
 #no_shuffle();
 no_long_string();
@@ -129,11 +130,12 @@ lua clean up the timer for pending ngx.sleep
 
 === TEST 3: kill pending resolver
 --- stream_server_config
-    lua_resolver agentzh.org:12345;
+    resolver 127.0.0.2:12345;
+    resolver_timeout 5ms;
     content_by_lua_block {
         function f()
             local sock = ngx.socket.tcp()
-            sock:connect("some.agentzh.org", 12345)
+            sock:connect("some.agentzh.org", 80)
         end
 
         local t, err = ngx.thread.spawn(f)
@@ -171,13 +173,12 @@ killed
 [error]
 --- error_log
 lua tcp socket abort resolver
-resolve name done: -2
 
 
 
 === TEST 4: kill pending connect
 --- stream_server_config
-    lua_resolver $TEST_NGINX_RESOLVER;
+    resolver $TEST_NGINX_RESOLVER ipv6=off;
     content_by_lua_block {
         local ready = false
         function f()
@@ -186,7 +187,7 @@ resolve name done: -2
             sock:close()
             ready = true
             sock:settimeout(10000)
-            sock:connect("agentzh.org", 12345)
+            sock:connect("127.0.0.2", 12345)
         end
 
         local t, err = ngx.thread.spawn(f)
@@ -314,3 +315,158 @@ thread created: zombie
 stream lua tcp socket abort resolver
 --- error_log
 
+
+
+=== TEST 7: no phantom uthreads decrement after killing parent uthread
+--- stream_server_config
+    content_by_lua_block {
+        local redis_port = $TEST_NGINX_REDIS_PORT
+        local dns_threads = {}
+
+        dns_threads[1] = ngx.thread.spawn(function()
+            local sock = ngx.socket.tcp()
+            sock:settimeout(2000)
+            local ok, err = sock:connect("127.0.0.1", redis_port)
+            if not ok then
+                return nil, err
+            end
+
+            sock:send("PING\r\n")
+            local line = sock:receive()
+            sock:setkeepalive()
+            return line
+        end)
+
+        dns_threads[2] = ngx.thread.spawn(function()
+            local child = coroutine.create(function()
+                local sock = ngx.socket.tcp()
+                sock:settimeout(2000)
+                local ok, err = sock:connect("127.0.0.1", redis_port)
+                if not ok then
+                    return nil, err
+                end
+
+                sock:send("PING\r\n")
+                local line = sock:receive()
+                sock:setkeepalive()
+                return line
+            end)
+
+            local ok, res = coroutine.resume(child)
+            return res
+        end)
+
+        ngx.thread.wait(dns_threads[1], dns_threads[2])
+
+        for _, t in ipairs(dns_threads) do
+            ngx.thread.kill(t)
+        end
+
+        local probe_threads = {}
+        for i = 1, 10 do
+            probe_threads[i] = ngx.thread.spawn(function()
+                local sock = ngx.socket.tcp()
+                sock:settimeout(2000)
+                local ok, err = sock:connect("127.0.0.1", redis_port)
+                if not ok then
+                    return nil, err
+                end
+
+                sock:send("PING\r\n")
+                local line = sock:receive()
+                sock:setkeepalive()
+                return line
+            end)
+        end
+
+        local ok_count = 0
+        for i = 1, #probe_threads do
+            local ok, res = ngx.thread.wait(probe_threads[i])
+            if ok and res then
+                ok_count = ok_count + 1
+            end
+        end
+
+        ngx.say("ok_count=", ok_count)
+    }
+--- stream_response
+ok_count=10
+--- no_error_log
+[error]
+[alert]
+
+
+
+=== TEST 8: kill uthread with child coroutine pending cosocket read after GC
+--- stream_config
+    server {
+        listen 127.0.0.1:$TEST_NGINX_RAND_PORT_1;
+
+        content_by_lua_block {
+            local body = string.rep("x", 8192)
+
+            ngx.print(body:sub(1, 64))
+            ngx.flush(true)
+            ngx.sleep(0.2)
+            ngx.print(body:sub(65))
+        }
+    }
+--- stream_server_config
+    lua_socket_log_errors off;
+
+    content_by_lua_block {
+        local port = $TEST_NGINX_RAND_PORT_1
+        local pinned_sockets = {}
+        local slow_read_pending = false
+
+        local fast = ngx.thread.spawn(function()
+            for _ = 1, 1000 do
+                if slow_read_pending then
+                    break
+                end
+                ngx.sleep(0.001)
+            end
+
+            return "ok"
+        end)
+
+        local slow = ngx.thread.spawn(function()
+            local child = coroutine.create(function()
+                local sock = ngx.socket.tcp()
+                pinned_sockets[#pinned_sockets + 1] = sock
+
+                sock:settimeout(10000)
+                local ok, err = sock:connect("127.0.0.1", port)
+                if not ok then
+                    return nil, err
+                end
+
+                slow_read_pending = true
+                return sock:receive(8192)
+            end)
+
+            local ok, body, err = coroutine.resume(child)
+            if not ok then
+                return nil, body
+            end
+
+            return body, err
+        end)
+
+        ngx.thread.wait(fast, slow)
+        ngx.thread.kill(fast)
+        ngx.thread.kill(slow)
+
+        fast = nil
+        slow = nil
+        collectgarbage("collect")
+        collectgarbage("collect")
+
+        ngx.sleep(0.3)
+
+        ngx.say("survived pinned=", #pinned_sockets)
+    }
+--- stream_response
+survived pinned=1
+--- no_error_log
+[alert]

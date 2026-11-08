@@ -32,7 +32,7 @@ __DATA__
 
         ngx.say("connected: ", ok)
 
-        local req = "flush_all\r\n"
+        local req = "get __nil\r\n"
 
         local bytes, err = sock:send(req)
         if not bytes then
@@ -56,7 +56,7 @@ __DATA__
 --- stream_response
 connected: 1
 request sent: 11
-received: OK
+received: END
 close: 1 nil
 --- no_error_log
 [error]
@@ -1234,5 +1234,71 @@ this exposed a memory leak in receiveuntil
     }
 --- stream_response
 ok
+--- no_error_log
+[error]
+
+
+
+=== TEST 20: close the socket after the iterator got a read error and was GC'ed (GH #2517)
+--- stream_server_config
+    content_by_lua_block {
+        -- JIT traces may keep the iterator closure alive
+        jit.off()
+        jit.flush()
+
+        local sock = ngx.socket.tcp()
+        local port = $TEST_NGINX_SERVER_PORT
+
+        local ok, err = sock:connect("127.0.0.1", port)
+        if not ok then
+            ngx.say("failed to connect: ", err)
+            return
+        end
+
+        local req = "GET /foo HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+
+        local bytes, err = sock:send(req)
+        if not bytes then
+            ngx.say("failed to send request: ", err)
+            return
+        end
+
+        local weak = setmetatable({}, { __mode = "v" })
+
+        local function read_until_error()
+            local reader = sock:receiveuntil("--no-such-boundary")
+            weak[1] = reader
+
+            while true do
+                local data, err = reader(1)
+                if not data then
+                    ngx.say("failed to read: ", err)
+                    return
+                end
+            end
+        end
+
+        read_until_error()
+
+        for _ = 1, 4 do
+            collectgarbage("collect")
+        end
+
+        ngx.say("reader collected: ", weak[1] == nil)
+
+        ok, err = sock:close()
+        ngx.say("close: ", ok, " ", err)
+    }
+--- config
+    server_tokens off;
+    location = /foo {
+        content_by_lua_block {
+            ngx.print("hello world")
+        }
+    }
+--- stream_response
+failed to read: closed
+reader collected: true
+close: 1 nil
 --- no_error_log
 [error]

@@ -33,7 +33,7 @@ __DATA__
 
         ngx.say("connected: ", ok)
 
-        local req = "flush_all\r\nget foo\r\nget bar\r\n"
+        local req = "version\r\nget __nil\r\nget __nil\r\n"
         -- req = "OK"
         local send_idx = 1
 
@@ -77,12 +77,12 @@ __DATA__
 --- config
     server_tokens off;
 
---- stream_response
-connected: 1
-received: OK
+--- stream_response_like
+^connected: 1
+received: VERSION [^\r\n]+
 received: END
 received: END
-setkeepalive: 1 nil
+setkeepalive: 1 nil$
 
 --- no_error_log
 [error]
@@ -104,7 +104,7 @@ setkeepalive: 1 nil
 
         ngx.say("connected: ", ok)
 
-        local req = "flush_all\r\n"
+        local req = "get __nil\r\n"
         -- req = "OK"
         local send_idx = 1
 
@@ -168,7 +168,7 @@ setkeepalive: 1 nil
 
 --- stream_response_like chop
 ^connected: 1
-(?:received: OK|failed to send request: timeout
+(?:received: END|failed to send request: timeout
 partial read: )
 read timed out: [1-9]\d*
 close: 1 nil$
@@ -184,7 +184,7 @@ close: 1 nil$
 
     content_by_lua_block {
         local sock = ngx.socket.tcp()
-        local port = 7658
+        local port = $TEST_NGINX_RAND_PORT_1
         local ok, err = sock:connect("127.0.0.1", port)
         if not ok then
             ngx.say("failed to connect: ", err)
@@ -245,7 +245,7 @@ received: OK!
 close: (?:nil socket busy writing|1 nil
 failed to send request: closed)$
 
---- tcp_listen: 7658
+--- tcp_listen: $TEST_NGINX_RAND_PORT_1
 --- tcp_shutdown: 0
 --- tcp_reply: OK!
 --- tcp_no_close: 1
@@ -260,7 +260,7 @@ failed to send request: closed)$
 
     content_by_lua_block {
         local sock = ngx.socket.tcp()
-        local port = 7658
+        local port = $TEST_NGINX_RAND_PORT_2
         local ok, err = sock:connect("127.0.0.1", port)
         if not ok then
             ngx.say("failed to connect: ", err)
@@ -327,7 +327,7 @@ F(ngx_http_lua_socket_tcp_finalize_write_part) {
     print_ubacktrace()
 }
 --- stap_out2
---- tcp_listen: 7658
+--- tcp_listen: $TEST_NGINX_RAND_PORT_2
 --- tcp_shutdown: 1
 --- tcp_query eval: "flush_all\r\n"
 --- tcp_query_len: 11
@@ -339,7 +339,7 @@ F(ngx_http_lua_socket_tcp_finalize_write_part) {
 === TEST 5: concurrent socket operations while connecting
 --- stream_server_config
     lua_socket_log_errors off;
-    lua_resolver $TEST_NGINX_RESOLVER;
+    resolver $TEST_NGINX_RESOLVER ipv6=off;
     content_by_lua_block {
         local sock = ngx.socket.tcp()
 
@@ -371,7 +371,7 @@ F(ngx_http_lua_socket_tcp_finalize_write_part) {
         end
 
         sock:settimeout(300)
-        local ok, err = sock:connect("106.187.41.147", 12345)
+        local ok, err = sock:connect("127.0.0.2", 12345)
         ngx.say("connect: ", ok, " ", err)
 
         local ok, err = sock:close()
@@ -399,8 +399,8 @@ close: nil closed
 === TEST 6: concurrent operations while resolving
 --- stream_server_config
     lua_socket_log_errors off;
-    lua_resolver agentzh.org:12345;
-    lua_resolver_timeout 300ms;
+    resolver 127.0.0.2:12345;
+    resolver_timeout 300ms;
     content_by_lua_block {
         local sock = ngx.socket.tcp()
 
@@ -432,7 +432,7 @@ close: nil closed
         end
 
         sock:settimeout(300)
-        local ok, err = sock:connect("some2.agentzh.org", 12345)
+        local ok, err = sock:connect("some2.agentzh.org", 80)
         ngx.say("connect: ", ok, " ", err)
 
         local ok, err = sock:close()
@@ -472,7 +472,7 @@ close: nil closed
             local res, err = sock:receive(1)
             ngx.say("receive: ", res, " ", err)
 
-            local bytes, err = sock:send("flush_all")
+            local bytes, err = sock:send("get __nil")
             ngx.say("send: ", bytes, " ", err)
 
             local ok, err = sock:close()
@@ -541,7 +541,7 @@ close: 1 nil
             local res, err = sock:receive(1)
             ngx.say("receive: ", res, " ", err)
 
-            local bytes, err = sock:send("flush_all")
+            local bytes, err = sock:send("get __nil")
             ngx.say("send: ", bytes, " ", err)
 
             local ok, err = sock:close()
@@ -598,4 +598,3 @@ close: 1 nil
 
 --- no_error_log
 [error]
-
